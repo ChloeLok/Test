@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+		<title>Tanks</title>
+
+		<!-- Babylon.js -->
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.6.2/dat.gui.min.js"></script>
+		<script src="https://preview.babylonjs.com/ammo.js"></script>
+		<script src="https://preview.babylonjs.com/cannon.js"></script>
+		<script src="https://preview.babylonjs.com/Oimo.js"></script>
+		<script src="https://preview.babylonjs.com/earcut.min.js"></script>
+		<script src="https://preview.babylonjs.com/babylon.js"></script>
+		<script src="https://preview.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+		<script src="https://preview.babylonjs.com/proceduralTexturesLibrary/babylonjs.proceduralTextures.min.js"></script>
+		<script src="https://preview.babylonjs.com/postProcessesLibrary/babylonjs.postProcess.min.js"></script>
+		<script src="https://preview.babylonjs.com/loaders/babylonjs.loaders.js"></script>
+		<script src="https://preview.babylonjs.com/serializers/babylonjs.serializers.min.js"></script>
+		<script src="https://preview.babylonjs.com/gui/babylon.gui.min.js"></script>
+		<script src="https://preview.babylonjs.com/inspector/babylon.inspector.bundle.js"></script>
+
+		<style>
+			html, body {
+				overflow: hidden;
+				width: 100%;
+				height: 100%;
+				margin: 0;
+				padding: 0;
+			}
+
+			#renderCanvas {
+				width: 100%;
+				height: 100%;
+				touch-action: none;
+			}
+
+			.buttons {
+				position: absolute;
+				bottom: 20px;
+				left: 20px;
+			}
+			
+			.button {
+				display: inline-block;
+				padding: 12px 20px;
+				background: white;
+				border: 2px solid white;
+				cursor: pointer;
+				margin-left: 6px;
+			}
+			
+			.noselect {
+				-webkit-touch-callout: none; /* iOS Safari */
+					-webkit-user-select: none; /* Safari */
+					 -khtml-user-select: none; /* Konqueror HTML */
+						 -moz-user-select: none; /* Old versions of Firefox */
+							-ms-user-select: none; /* Internet Explorer/Edge */
+									user-select: none; /* Non-prefixed version, currently
+																				supported by Chrome, Edge, Opera and Firefox */
+			}
+		</style>
+	</head>
+<body>
+	<canvas id="renderCanvas"></canvas>
+	<div class="buttons noselect">
+		<div class="button" id="camHome">HOME</div>
+		<div class="button" id="pumpDisplay">Show Pump Data</div>
+	</div>
+	<script>
+
+
+var updateRate = 5.0;
+
+var canvas = document.getElementById("renderCanvas");
+
+var engine = null;
+var scene = null;
+
+var pipes = [];
+var pumpDisplays = [];
+
+var materialHighlight;
+var materialTransparent;
+var matPipeWithOil;
+var matPipeWithSteam;
+var matPipeHot;
+var matPipeCold;
+
+var camStartPos;
+var overlayColor = new BABYLON.Color3(0.4, 0.8, 0.7);
+
+var sineEase = new BABYLON.SineEase(); 
+sineEase.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+
+var sceneToRender = null;
+var createDefaultEngine = function() { return new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true,  disableWebGL2Support: false}); };
+var delayCreateScene = async function () {
+	// Create a scene.
+	var scene = new BABYLON.Scene(engine);
+	
+	// Create a default skybox with an environment.
+	var hdrTexture = BABYLON.CubeTexture.CreateFromPrefilteredData("environment.dds", scene);
+	var currentSkybox = scene.createDefaultSkybox(hdrTexture, true);
+	//currentSkybox.backFaceCulling = false;
+	currentSkybox.material.reflectionTexture = hdrTexture;
+	currentSkybox.material.reflectionTexture.coordinatesMode = BABYLON.Texture.SKYBOX_MODE;
+	//currentSkybox.diffuseColor = new BABYLON.Color3(0, 0, 0);
+	//currentSkybox.specularColor = new BABYLON.Color3(0, 0, 0);
+	//skybox.material = skyboxMaterial;	
+
+	// Append glTF model to scene.
+	await BABYLON.SceneLoader.AppendAsync("", "pipes-and-simple-tank.glb", scene, function (scene) {
+			// Create a default arc rotate camera and light.
+			//scene.createDefaultCameraOrLight(true, true, true);
+
+			// The default camera looks at the back of the asset.
+			// Rotate the camera by 180 degrees to the front of the asset.
+			// scene.activeCamera.alpha += Math.PI;
+	});
+	
+	materialHighlight = new BABYLON.StandardMaterial("Highlight", scene);
+	materialHighlight.diffuseColor = new BABYLON.Color3(1, 1, 0.9);
+	
+	matPipeWithOil = new BABYLON.StandardMaterial("PipeWithOil", scene);
+	matPipeWithOil.diffuseColor = new BABYLON.Color3(0.4, 0.3, 0.1);
+	
+	matPipeWithSteam = new BABYLON.StandardMaterial("PipeWithSteam", scene);
+	matPipeWithSteam.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.6);
+	
+	materialTransparent = new BABYLON.StandardMaterial("mat", scene);
+	materialTransparent.alpha = 0;
+	
+	matPipeHot = new BABYLON.StandardMaterial("mat", scene);
+	matPipeHot.diffuseColor = new BABYLON.Color3(0.7, 0.2, 0.2);
+	
+	matPipeCold = new BABYLON.StandardMaterial("mat", scene);
+	matPipeCold.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.7);
+	
+	var mshs = scene.meshes;
+	mshs.forEach(function(msh) {
+		// msh.receiveShadows = true;
+		// shadowGenerator.addShadowCaster(msh);
+		try {
+			console.log(msh.name);
+			console.log(msh.metadata.gltf.extras);
+			
+			// fill pipe array
+			if (msh.name.includes('Pipe-tank')) {
+				pipes.push(msh);
+				console.log("pipe added: " + msh.name);
+			}
+			
+			// fill pumpDisplay array
+			if (msh.name.includes('Display-Pump-')) {
+				pumpDisplays.push(msh);
+				console.log("Display added: " + msh.name);
+				
+				//hide display
+				msh.isVisible = false;
+			}
+			
+			
+			// remove clickable from meshes
+			msh.isPickable = false;
+			
+			
+			// add click event on tank clicker
+			if (msh.metadata.gltf.extras.clickEvent) {
+				addClickerFunction(msh);
+			}
+			
+			// add iot data function for display
+			if (msh.metadata.gltf.extras.iotData) {
+				console.log(msh.metadata.gltf.extras.iotData);
+				// displayIotData(msh);
+			}
+			
+			// changeFluidlevel
+			if (msh.metadata.gltf.extras.iotFluidlevel) {
+				// changeFluidLevel(msh, msh.metadata.gltf.extras.iotFluidlevel)
+			}							
+			
+		} catch (e) {
+			//console.log(e);
+		}
+
+	});
+	
+	// This creates and positions a free camera (non-mesh)
+	var camera = new BABYLON.TargetCamera("camera1", new BABYLON.Vector3(0, 25, 18), scene);
+
+	// This targets the camera to scene origin
+	camera.setTarget(new BABYLON.Vector3(0, 4, 0));
+	
+	camStartPos = camera.position;
+	
+	// AmbientOcclusion
+	// var ssao = new BABYLON.SSAORenderingPipeline('ssaopipeline', scene, 0.75);
+	// scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("ssaopipeline", camera);
+	
+	var hemi = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+	hemi.intensity = 0.2;
+	hemi.diffuse = new BABYLON.Color3(0.7, 0.6, 1);
+	
+	var light = new BABYLON.DirectionalLight("DirectionalLight", new BABYLON.Vector3(-5, -5, -5), scene);
+	light.intensity = 3.0;
+	//light.range = 2000;
+	light.diffuse = new BABYLON.Color3(1, 1, 0.6);
+	
+
+	// This attaches the camera to the canvas
+	// camera.attachControl(canvas, true);
+	
+	// react to keyboard 
+	scene.onKeyboardObservable.add((kbInfo) => {
+		switch (kbInfo.type) {
+			case BABYLON.KeyboardEventTypes.KEYDOWN:
+				
+				// show inspector und debug
+				if(kbInfo.event.key == "i"){
+					if (scene.debugLayer.isVisible()){
+						scene.debugLayer.hide();
+					} else {
+						scene.debugLayer.show();
+					}
+				}
+				
+				// trigger values
+				if(kbInfo.event.key == "t"){
+					var data = createDummyData();
+					dataIncoming(data);
+				}
+				
+				break;
+			case BABYLON.KeyboardEventTypes.KEYUP:
+				console.log("KEY UP: ", kbInfo.event.keyCode);
+				break;
+		}
+	});
+	
+	
+	// display IoT data on displays
+	function displayIotData(msh) {
+		console.log(msh.metadata.gltf.extras.iotData);
+		var evtData = JSON.parse(msh.metadata.gltf.extras.iotData);
+		console.log(evtData);
+		updateDisplay(msh, evtData);
+	}
+	
+	// change Fluid level
+	function changeFluidLevel(msh, level) {
+		// change level (y size) with animation
+		var fStart = new BABYLON.Vector3(msh.scaling.x, msh.scaling.y, msh.scaling.z);
+		var fEnd = new BABYLON.Vector3(msh.scaling.x, level, msh.scaling.z);
+
+		anim = BABYLON.Animation.CreateAndStartAnimation('fluidlevel', msh, "scaling", 30, 30 * updateRate, fStart, fEnd, 0, sineEase);
+		// anim.onAnimationEnd = function() { /* ... do stuff after animation finishes ... */ };
+		
+		// change level without animation
+		// msh.scaling.y = msh.metadata.gltf.extras.iotFluidlevel;
+	}
+	window.changeFluidLevel = changeFluidLevel;
+	
+	// add a clicker function for the tanks
+	function addClickerFunction(msh) {
+		console.log(msh.metadata.gltf.extras.clickEvent);
+		console.log(pipes);
+		console.log(materialTransparent);
+		
+		msh.isPickable = true;
+		msh.actionManager = new BABYLON.ActionManager(scene);
+		msh.material = materialTransparent;
+		
+		try {
+			var evtData = JSON.parse(msh.metadata.gltf.extras.clickEvent);
+			console.log(evtData.target);
+			
+			msh.actionManager.registerAction( new BABYLON.ExecuteCodeAction(
+				{ trigger: BABYLON.ActionManager.OnPickTrigger }, function (evt) {
+
+					pipes.forEach( function(pipe) {
+						if (!evtData.target.includes( pipe.name ) && pipe.tmpMat) {
+							pipe.renderOverlay = false;
+							//pipe.material = pipe.tmpMat;
+							//pipe.tmpMat = null;
+							console.log("pipe processed: " + pipe.name);
+						}
+					});
+					
+					// move camera to tank
+					moveCameraToNode(camera, msh);
+
+					// on the trigger
+					evtData.target.forEach(function(target) {
+						//console.log(target);
+						const obj = scene.getNodeByName(target);
+						if (!obj.renderOverlay) {
+							obj.overlayColor = overlayColor;
+							obj.renderOverlay = true;
+							obj.tmpMat = obj.material;
+							//obj.material = materialHighlight;
+						} else {
+							obj.renderOverlay = false;
+							//obj.material = obj.tmpMat;
+							obj.tmpMat = null;
+						}
+					});
+				})
+			);
+		} catch (e) {
+			console.log(e);
+		}
+	}
+
+	return scene;
+};
+
+window.initFunction = async function() {
+	var asyncEngineCreation = async function() {
+		try {
+		return createDefaultEngine();
+		} catch(e) {
+		console.log("the available createEngine function failed. Creating the default engine instead");
+		return createDefaultEngine();
+		}
+	}
+
+	window.engine = await asyncEngineCreation();
+	if (!engine) throw 'engine should not be null.';
+	window.scene = await delayCreateScene();
+};
+initFunction().then(() => {sceneToRender = scene        
+	engine.runRenderLoop(function () {
+		if (sceneToRender && sceneToRender.activeCamera) {
+			sceneToRender.render();
+		}
+	});
+});
+
+// Resize
+window.addEventListener("resize", function () {
+	engine.resize();
+});
+
+// async forEach
+async function asyncForEach(array, callback) {
+	for (let index = 0; index < array.length; index++) {
+		await callback(array[index], index, array);
+	}
+}
+
+
+// creates a dynamic texture and add text to it
+function updateDisplay(msh, data) {
+	var tex;
+	
+	// clone data (to not permanently remove elements)
+	data = JSON.parse(JSON.stringify(data));;
+	
+	if (msh.material.name !== "dynamic" + msh.name) {
+		tex = new BABYLON.DynamicTexture("dynamicTex" + msh.name, {width:512, height:256}, scene);   
+		msh.material = new BABYLON.StandardMaterial("dynamic" + msh.name, scene);
+		msh.material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+		msh.material.diffuseTexture = tex;
+		msh.material.emissiveTexture = tex;
+	} else {
+		tex = msh.material.diffuseTexture;
+	}
+	
+	//Add text to dynamic texture
+	var font = "normal 38px monospace";
+	var fontB = "bold 38px monospace";
+	
+	var y = 120;
+	var x = null; // center 
+	
+	// display title 
+	if (data["title"]) {
+		var title = data["title"] ? data["title"] : "Tank Id";
+		tex.drawText(title, x, 60, fontB, "white", "black", true, true);
+		delete data["title"];
+	}
+	
+	for (var value in data){
+		tex.drawText(value + ": " + data[value], x, y, font, "white", "transparent", true, true);
+		y += 50;
+	};
+	
+	// to see the dynamic texture the right way
+	msh.scaling.z = -1.0;
+}
+
+// animate camera position to see target
+function moveCameraToNode(cam, target) {
+	const cameraDistance = 16;
+	
+	var fStart = cam.position;
+	var fEnd = new BABYLON.Vector3(-target.position.x, cam.position.y, target.position.z + cameraDistance);
+
+	anim = BABYLON.Animation.CreateAndStartAnimation('camAnimation', cam, "position", 30, 30 * 2.5, fStart, fEnd, 0, sineEase);
+}
+
+// animate camera position to position
+function moveCameraToPosition(cam, position) {
+	var fStart = cam.position;
+	var fEnd = position;
+	anim = BABYLON.Animation.CreateAndStartAnimation('camAnimation', cam, "position", 30, 30 * 2.5, fStart, fEnd, 0, sineEase);
+}
+
+// shows the content of a pipe with a different material
+function colorPipe(msh, value) {
+	console.log(msh, value);
+	// backup original pipe material
+	if (!msh.oldMat) {
+		msh.oldMat = msh.material;
+	}
+	
+	// nothing in the pipes
+	if (value == 0) {
+		msh.material = msh.oldMat;
+	}
+	
+	// cold fluid in the pipes
+	if (value == 1) {
+		msh.material = matPipeCold;
+	}
+	
+	// hot steam or fluid in the pipes
+	if (value == 2) {
+		msh.material = matPipeHot;
+	}
+	
+	// add more here
+	
+}
+
+// call this function with you data in json format (see below)
+function dataIncoming(data) {
+	console.log(data);
+	
+	for (var i = 0; i < data.tankdata.length; i++) {
+		const tankNr = i + 1;
+		
+		// start fluid animation
+		const fluid = scene.getNodeByName("Fluidlevel-" + tankNr);
+		changeFluidLevel(fluid, data.tankdata[i].levelPercent)
+		
+		// change tank display
+		const showValues = {
+			"title" : data.tankdata[i].tankId,
+			"Fluid Level" : data.tankdata[i].level + data.tankdata[i].levelUnit,
+			"Temperature" : data.tankdata[i].temperature + data.tankdata[i].temperatureUnit,
+		}
+		
+		const display = scene.getNodeByName("Tank-" + tankNr + "-Display");
+		updateDisplay(display, showValues);
+		
+		// display pipe status
+		const pipeIn = scene.getNodeByName("Pipe-tank" + tankNr + "in");
+		colorPipe(pipeIn, data.tankdata[i].in);
+		
+		const pipeOut = scene.getNodeByName("Pipe-tank" + tankNr + "out");
+		colorPipe(pipeOut, data.tankdata[i].out);
+		
+		// const cam = scene.getNodeByName("camera1");
+		// moveCameraToNode(cam, pipeOut);
+	}
+	
+	for (var i = 0; i < data.pumpdata.length; i++) {
+		var pumpNr = i + 1;
+		
+		const showValues = {
+			"title" : data.pumpdata[i].pumpId,
+			"State" : data.pumpdata[i].state,
+			"Pressure" : data.pumpdata[i].pressure,
+		}
+		
+		const display = scene.getNodeByName("Display-Pump-" + pumpNr);
+		updateDisplay(display, showValues);
+	}
+
+}
+
+/*
+JSON format for the data
+
+var jData = { 
+	"tankdata" : [ 
+		{	
+			"tankId" : "tank123zt", 
+			"levelPercent" : 0, // 0 to 1.0 
+			"level" : 0, // 0 to ... in the unit
+			"levelUnit" : "mmt" 
+			"temperature" : 12, 
+			"temperatureUnit" : "CEL", 
+			"in" : 0, // 0 = empty, 1 = cold, 2 = hot
+			"out" : 1 // 0 = empty, 1 = cold, 2 = hot 
+		},
+		...
+	],
+	"pumpdata" : [
+		{	
+			"pumpId" : "pump123zt", 
+			"state" : "active", 
+			"pressure" : "12"
+		},
+		...
+	]
+}
+*/
+
+// dummy data generator
+function createDummyData() {
+	var dummyData = { 
+		"tankdata" : []
+	}
+
+	for (var i = 0; i < 6; i++) {
+		var rnd = Math.random()
+		el = {
+			"tankId" : "tank" + (rnd * 99).toFixed(0) + "zt", 
+			"levelPercent" : rnd.toFixed(2), // 0 to 1.0 
+			"level" : (rnd * 123).toFixed(0), // 0 to ... in the unit
+			"levelUnit" : 'mmt', 
+			"temperature" : (rnd * 12).toFixed(1), 
+			"temperatureUnit" : "CEL", 
+			"in" : (rnd * 3).toFixed(0), 
+			"out" : ((1 - rnd) * 3).toFixed(0) 
+		}
+		dummyData.tankdata.push(el);
+	}
+	
+	dummyData.pumpdata = [];
+
+	for (var i = 0; i < 3; i++) {
+		var rnd = Math.random()
+		el = {
+			"pumpId" : "pump" + (rnd * 99).toFixed(0) + "zt", 
+			"state" : rnd < 0.5 ? "online" : "pumping", // 0 to 1.0 
+			"pressure" : (rnd * 23.4).toFixed(2), // 0 to ... in the unit
+		}
+		dummyData.pumpdata.push(el);
+	}
+	
+	return dummyData;
+}
+
+
+// html buttons and actions
+var BtncamHome = document.getElementById("camHome");
+BtncamHome.onclick = function() { 
+	const cam = scene.getNodeByName("camera1");
+	moveCameraToPosition(cam, camStartPos); 
+}
+
+var BtnDisplay = document.getElementById("pumpDisplay");
+BtnDisplay.onclick = function() { 
+	togglePumpDisplays();
+}
+
+// show and hide pump displays
+function togglePumpDisplays() {
+	pumpDisplays.forEach( function(pumpDisplay) {
+		pumpDisplay.isVisible = !pumpDisplay.isVisible;
+	});
+}
+
+// how to regularly update data
+function updateData() {
+
+	// replace with YOUR getData function to get data from the API
+	var data = createDummyData();
+	console.log("dummy", data);
+	
+	dataIncoming(data);
+}
+
+setInterval(updateData, updateRate * 1000);
+
+    </script>
+</body>
+</html>
